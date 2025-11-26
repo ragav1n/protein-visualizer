@@ -177,7 +177,7 @@ export function AttackModal({
                   </span>
                 </p>
 
-                {result.report && (
+                {!!result.report && (
                   <div className="mt-3">
                     <p className="text-slate-700 font-semibold mb-2">Analysis Report:</p>
                     <div className="bg-white rounded-lg p-3 overflow-auto max-h-64 border border-teal-100">

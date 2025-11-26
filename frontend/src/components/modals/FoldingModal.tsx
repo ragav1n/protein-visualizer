@@ -108,7 +108,7 @@ export function FoldingModal({
           Start Folding
         </Button>
 
-        {result && (
+        {!!result && (
           <div className="border-t border-teal-100 pt-4">
             <div className="bg-gradient-to-br from-teal-50 to-emerald-50 rounded-lg p-4 border border-teal-100">
               <h4 className="font-bold text-slate-900 mb-3">Folding Result</h4>
