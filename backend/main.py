@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from pdb_utils import parse_pdb, infer_bonds, atoms_to_json, load_atoms_from_json, calculate_phi_psi, calculate_contact_map, get_sequence
-from pocket import detect_pockets
+from pocket import Scientific_Pockets
 from docking import run_docking_job
 from refinement import run_refinement_job
 from folding import submit_folding_job
@@ -186,20 +186,39 @@ def detect(job_id: str, pdb_id: str = Form(...)):
 
     json_path = os.path.join(job["dir"], f"{pdb_id}.json")
 
+    if not os.path.exists(json_path):
+        raise HTTPException(404, "Molecule JSON not found")
+
     with open(json_path) as f:
         mol = json.load(f)
 
-    pockets = detect_pockets(mol)
+    # --- Validate atom fields for Scientific_Pockets() ---
+    cleaned_atoms = []
+    for atom in mol.get("atoms", []):
+        cleaned_atoms.append({
+            "x": float(atom.get("x", 0)),
+            "y": float(atom.get("y", 0)),
+            "z": float(atom.get("z", 0)),
+            "chain": atom.get("chain", "_"),
+            "resseq": int(atom.get("resseq", 0)),
+            "resname": atom.get("resname", "UNK"),
+        })
 
+    mol["atoms"] = cleaned_atoms
+
+    # --- Run scientific pocket detection ---
+    try:
+        result = Scientific_Pockets(mol)
+    except Exception as e:
+        raise HTTPException(500, f"Pocket detection failed: {str(e)}")
+
+    # Save result
     out = os.path.join(job["dir"], f"{pdb_id}.pockets.json")
     with open(out, "w") as f:
-        json.dump({"pockets": pockets}, f, indent=2)
-    
-    # Save jobs just in case we track pockets in JOBS later
+        json.dump(result, f, indent=2)
+
     save_jobs()
-
-    return {"pockets": pockets}
-
+    return result
 
 # ---------------------------
 # Phase 4: Bond Energy LJ
