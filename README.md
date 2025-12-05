@@ -37,10 +37,22 @@ A comprehensive web application for visualizing and analyzing protein structures
 ## Getting Started
 
 ### Backend
+
+1. **Install Miniconda**  
+Download and install Miniconda from the official guide:  
+[Miniconda Installation Instructions](https://www.anaconda.com/docs/getting-started/miniconda/install#quickstart-install-instructions)
+
+2. **Open Anaconda Prompt**  
+
+3. **Navigate to the backend folder and set up the environment**  
+
 ```bash
 cd backend
+conda create -n dock python=3.10 -y
+conda activate dock
+conda install -c conda-forge openbabel -y
 pip install -r requirements.txt
-python main.py
+uvicorn main:app --reload
 ```
 
 ### Frontend
