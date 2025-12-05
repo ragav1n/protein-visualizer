@@ -1,59 +1,56 @@
-import os, json, shutil, subprocess
+import os
+import subprocess
 
-def docking_available():
-    return shutil.which("vina") is not None
+def keep_first_model(input_pdb: str, output_pdb: str):
+    with open(input_pdb, "r") as f:
+        lines = f.readlines()
+    output_lines = []
+    in_model = False
+    for line in lines:
+        if line.startswith("MODEL"):
+            if in_model:
+                break
+            in_model = True
+        if in_model or not line.startswith("MODEL"):
+            output_lines.append(line)
+        if line.startswith("ENDMDL") and in_model:
+            break
+    with open(output_pdb, "w") as f:
+        f.writelines(output_lines)
 
+def run_docking_job(receptor_pdb: str, ligand_file: str, dock_dir: str,
+                    center=(10,20,15), size=(20,20,20)):
+    """
+    Prepare receptor/ligand and run AutoDock Vina.
+    Returns output path and optionally parses docking scores.
+    """
+    receptor_single = os.path.join(dock_dir, "receptor_single.pdb")
+    receptor_pdbqt = os.path.join(dock_dir, "receptor.pdbqt")
+    ligand_pdbqt = os.path.join(dock_dir, "ligand.pdbqt")
+    out_pdbqt = os.path.join(dock_dir, "out.pdbqt")
 
-def json_to_pdb(json_file, out_pdb):
-    with open(json_file) as f:
-        mol = json.load(f)
+    # Step 1: keep only first model
+    keep_first_model(receptor_pdb, receptor_single)
 
-    with open(out_pdb, "w") as out:
-        i = 1
-        for a in mol["atoms"]:
-            out.write(
-                "ATOM  %5d  %-4s LIG     1    %8.3f%8.3f%8.3f\n" %
-                (i, a["element"], a["x"], a["y"], a["z"])
-            )
-            i += 1
+    # Step 2: convert receptor to PDBQT
+    subprocess.run(["obabel", receptor_single, "-O", receptor_pdbqt, "-xr"], check=True)
 
+    # Step 3: convert ligand to PDBQT
+    subprocess.run(["obabel", ligand_file, "-O", ligand_pdbqt, "--gen3d"], check=True)
 
-def run_docking_job(receptor_json, ligand_path, outdir):
-
-    receptor_pdb = os.path.join(outdir, "receptor.pdb")
-    json_to_pdb(receptor_json, receptor_pdb)
-
-    ligand_pdbqt = None
-    if ligand_path:
-        ligand_pdbqt = os.path.join(outdir, "ligand.pdbqt")
-        shutil.copy(ligand_path, ligand_pdbqt)
-
-    out_pdbqt = os.path.join(outdir, "out.pdbqt")
-
-    if not docking_available():
-        with open(out_pdbqt, "w") as f:
-            f.write("REMARK VINA RESULT: -6.5\n")
-        return {"status": "mock", "best_energy": -6.5, "pose": out_pdbqt}
-
-    cmd = [
+    # Step 4: run Vina
+    subprocess.run([
         "vina",
-        "--receptor", receptor_pdb,
+        "--receptor", receptor_pdbqt,
         "--ligand", ligand_pdbqt,
+        "--center_x", str(center[0]),
+        "--center_y", str(center[1]),
+        "--center_z", str(center[2]),
+        "--size_x", str(size[0]),
+        "--size_y", str(size[1]),
+        "--size_z", str(size[2]),
         "--out", out_pdbqt,
-        "--center_x", "0",
-        "--center_y", "0",
-        "--center_z", "0",
-        "--size_x", "20",
-        "--size_y", "20",
-        "--size_z", "20"
-    ]
+        "--exhaustiveness", "8"
+    ], check=True)
 
-    subprocess.run(cmd, check=False)
-
-    best = -6.0
-    with open(out_pdbqt) as f:
-        for line in f:
-            if "REMARK VINA RESULT" in line:
-                best = float(line.split()[-1])
-
-    return {"status": "success", "best_energy": best, "pose": out_pdbqt}
+    return {"output_pdbqt": out_pdbqt}

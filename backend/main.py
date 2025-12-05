@@ -262,33 +262,40 @@ def bond_energy(job_id: str, pdb_id: str, a_idx: int, b_idx: int):
 async def start_docking(
     job_id: str,
     receptor_pdb_id: str = Form(...),
-    ligand_file: UploadFile = File(None)
+    ligand_file: UploadFile = File(...)
 ):
     job = JOBS.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+
     job_dir = job["dir"]
 
-    receptor_json = os.path.join(job_dir, f"{receptor_pdb_id}.json")
+    receptor_pdb = os.path.join(job_dir, f"{receptor_pdb_id}.pdb")
+    if not os.path.exists(receptor_pdb):
+        raise HTTPException(404, f"Receptor PDB not found: {receptor_pdb}")
 
-    ligand_path = None
-    if ligand_file:
-        ligand_path = os.path.join(job_dir, ligand_file.filename)
-        with open(ligand_path, "wb") as f:
-            f.write(await ligand_file.read())
+    ligand_path = os.path.join(job_dir, ligand_file.filename)
+    with open(ligand_path, "wb") as f:
+        f.write(await ligand_file.read())
 
     dock_id = uuid.uuid4().hex[:8]
     dock_dir = os.path.join(job_dir, "docking", dock_id)
     os.makedirs(dock_dir, exist_ok=True)
 
     async def run():
-        result = run_docking_job(receptor_json, ligand_path, dock_dir)
-        with open(os.path.join(dock_dir, "result.json"), "w") as f:
-            json.dump(result, f, indent=2)
-
-        JOBS[job_id].setdefault("docking", {})[dock_id] = {
-            "status": "done",
-            "result": result
-        }
-        save_jobs()
+        try:
+            result = run_docking_job(receptor_pdb, ligand_path, dock_dir)
+            job.setdefault("docking", {})[dock_id] = {
+                "status": "done",
+                "result": result
+            }
+            save_jobs()
+        except Exception as e:
+            job.setdefault("docking", {})[dock_id] = {
+                "status": "error",
+                "error": str(e)
+            }
+            save_jobs()
 
     asyncio.create_task(run())
 
