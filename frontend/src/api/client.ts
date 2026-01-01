@@ -43,22 +43,14 @@ export interface DockingResult {
     path?: string;
     [key: string]: unknown;
   }>;
+  best_energy?: number;
+  output_pdb?: string;
   [key: string]: unknown;
 }
 
-export interface RefinementResult {
-  refinement_id: string;
-  status: string;
-  files?: string[];
-  [key: string]: unknown;
-}
-
-export interface AttackResult {
-  attack_id: string;
-  status: string;
-  report?: unknown;
-  [key: string]: unknown;
-}
+// ----------------
+// Interfaces
+// ----------------
 
 export interface JobSummary {
   job_id: string;
@@ -66,6 +58,10 @@ export interface JobSummary {
   molecules: string[];
   created_at?: string;
 }
+
+// ----------------
+// API Client
+// ----------------
 
 export const apiClient = {
   async getJobs(): Promise<{ jobs: JobSummary[] }> {
@@ -143,7 +139,18 @@ export const apiClient = {
       throw new Error(`Pocket detection failed: ${response.statusText}`);
     }
 
-    return response.json();
+    const data = await response.json();
+
+    // Transform backend format to frontend interface
+    const pockets = (data.pockets || []).map((p: any) => ({
+      pocket_id: p.id.toString(),
+      score: p.druggability,
+      center: Array.isArray(p.center) ? { x: p.center[0], y: p.center[1], z: p.center[2] } : p.center,
+      residues: p.residues, // Keep as strings, or parse if needed
+      ...p
+    }));
+
+    return { pockets };
   },
 
   async startDocking(
@@ -181,80 +188,11 @@ export const apiClient = {
     return response.json();
   },
 
-  async startRefinement(
-    jobId: string,
-    pdbId: string,
-    poseFile: File | string
-  ): Promise<{ refinement_id: string }> {
-    const formData = new FormData();
-    formData.append('pdb_id', pdbId);
-
-    if (typeof poseFile === 'string') {
-      formData.append('pose_file', poseFile);
-    } else {
-      formData.append('pose_file', poseFile);
-    }
-
-    const response = await fetch(`${API_BASE_URL}/job/${jobId}/start_refinement`, {
-      method: 'POST',
-      body: formData,
-    });
+  async getDockedMolecule(jobId: string, dockingId: string): Promise<MoleculeData> {
+    const response = await fetch(`${API_BASE_URL}/job/${jobId}/docking/${dockingId}/molecule`);
 
     if (!response.ok) {
-      throw new Error(`Refinement failed to start: ${response.statusText}`);
-    }
-
-    return response.json();
-  },
-
-  async getRefinementResult(jobId: string, refinementId: string): Promise<RefinementResult> {
-    const response = await fetch(`${API_BASE_URL}/job/${jobId}/refinement/${refinementId}/result`);
-
-    if (!response.ok) {
-      throw new Error(`Failed to get refinement result: ${response.statusText}`);
-    }
-
-    return response.json();
-  },
-
-  async startFolding(jobId: string, sequence: string): Promise<{ folding_id: string }> {
-    const formData = new FormData();
-    formData.append('sequence', sequence);
-
-    const response = await fetch(`${API_BASE_URL}/job/${jobId}/start_folding`, {
-      method: 'POST',
-      body: formData,
-    });
-
-    if (!response.ok) {
-      throw new Error(`Folding failed to start: ${response.statusText}`);
-    }
-
-    return response.json();
-  },
-
-  async startAttack(jobId: string, pdbId: string, atomIndex: number): Promise<{ attack_id: string }> {
-    const formData = new FormData();
-    formData.append('pdb_id', pdbId);
-    formData.append('atom_index', atomIndex.toString());
-
-    const response = await fetch(`${API_BASE_URL}/job/${jobId}/attack`, {
-      method: 'POST',
-      body: formData,
-    });
-
-    if (!response.ok) {
-      throw new Error(`Attack failed to start: ${response.statusText}`);
-    }
-
-    return response.json();
-  },
-
-  async getAttackResult(jobId: string, attackId: string): Promise<AttackResult> {
-    const response = await fetch(`${API_BASE_URL}/job/${jobId}/attack/${attackId}/result`);
-
-    if (!response.ok) {
-      throw new Error(`Failed to get attack result: ${response.statusText}`);
+      throw new Error(`Failed to load docked molecule: ${response.statusText}`);
     }
 
     return response.json();

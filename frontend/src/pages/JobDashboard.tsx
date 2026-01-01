@@ -2,22 +2,18 @@ import { useState, useEffect } from 'react';
 import { ExternalLink, Loader2, Box } from 'lucide-react';
 import { apiClient, MoleculeData, Pocket } from '../api/client';
 import { useApp } from '../context/AppContext';
-import { useParams } from '../utils/router';
+import { useRouter, useParams } from '../utils/router';
 import { Header } from '../components/shared/Header';
 import { Button } from '../components/shared/Button';
 import { Toast } from '../components/shared/Toast';
 import { MoleculeViewer } from '../components/MoleculeViewer';
 import { ActivityLog, LogEntry } from '../components/ActivityLog';
-import { DockingModal } from '../components/modals/DockingModal';
-import { RefinementModal } from '../components/modals/RefinementModal';
-import { FoldingModal } from '../components/modals/FoldingModal';
-import { AttackModal } from '../components/modals/AttackModal';
 import { ColorMode, RenderMode } from '../components/CanvasMoleculeViewer';
-import { API_BASE_URL } from '../config';
 
 export function JobDashboard() {
-  const { jobId: contextJobId, pdbId, setPdbId, selectedAtomIndex, setSelectedAtomIndex } = useApp();
+  const { jobId: contextJobId, pdbId, selectedAtomIndex, setSelectedAtomIndex } = useApp();
   const { jobId: routeJobId } = useParams();
+  const { navigate } = useRouter();
   const jobId = routeJobId || contextJobId;
 
   const [moleculeData, setMoleculeData] = useState<MoleculeData | null>(null);
@@ -26,26 +22,12 @@ export function JobDashboard() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [toast, setToast] = useState<{ message: string; type: 'error' | 'success' | 'info' } | null>(null);
 
-  const [isDockingModalOpen, setIsDockingModalOpen] = useState(false);
-  const [isRefinementModalOpen, setIsRefinementModalOpen] = useState(false);
-  const [isFoldingModalOpen, setIsFoldingModalOpen] = useState(false);
-  const [isAttackModalOpen, setIsAttackModalOpen] = useState(false);
-
   // Visualization State
   const [colorMode, setColorMode] = useState<ColorMode>('element');
   const [renderMode, setRenderMode] = useState<RenderMode>('ball-and-stick');
-  const [showLabels, setShowLabels] = useState(false);
 
   const addLog = (action: string, data: unknown) => {
-    setLogs((prev) => [
-      {
-        id: Date.now().toString(),
-        timestamp: new Date(),
-        action,
-        data,
-      },
-      ...prev,
-    ]);
+    setLogs((prev) => [{ id: Math.random().toString(36), timestamp: new Date(), action, data }, ...prev]);
   };
 
   const handleLoadMolecule = async () => {
@@ -69,23 +51,6 @@ export function JobDashboard() {
     }
   };
 
-  const handlePreprocess = async () => {
-    if (!jobId || !pdbId) return;
-
-    setLoading((prev) => ({ ...prev, preprocess: true }));
-    try {
-      const data = await apiClient.preprocess(jobId, pdbId);
-      addLog('Preprocess', data);
-      setToast({ message: 'Preprocessing completed', type: 'success' });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Preprocessing failed';
-      setToast({ message, type: 'error' });
-      addLog('Preprocess Error', { error: message });
-    } finally {
-      setLoading((prev) => ({ ...prev, preprocess: false }));
-    }
-  };
-
   const handleDetectPockets = async () => {
     if (!jobId || !pdbId) return;
 
@@ -94,12 +59,9 @@ export function JobDashboard() {
       const data = await apiClient.detectPockets(jobId, pdbId);
       setPockets(data.pockets || []);
       addLog('Detect Pockets', data);
-      setToast({
-        message: `Found ${data.pockets?.length || 0} pockets`,
-        type: 'success',
-      });
+      setToast({ message: `Detected ${data.pockets?.length || 0} pockets`, type: 'success' });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Pocket detection failed';
+      const message = error instanceof Error ? error.message : 'Failed to detect pockets';
       setToast({ message, type: 'error' });
       addLog('Detect Pockets Error', { error: message });
     } finally {
@@ -111,118 +73,149 @@ export function JobDashboard() {
     const initJob = async () => {
       if (!jobId) return;
 
-      // If we have both IDs, just load the molecule
       if (pdbId) {
         handleLoadMolecule();
-        return;
-      }
-
-      // If missing pdbId (e.g. reload or history), fetch job details first
-      setLoading((prev) => ({ ...prev, molecule: true }));
-      try {
-        const job = await apiClient.getJob(jobId);
-        if (job.molecules && job.molecules.length > 0) {
-          const firstPdbId = job.molecules[0];
-          setPdbId(firstPdbId);
-          // Now load molecule with the recovered ID
-          const data = await apiClient.getMolecule(jobId, firstPdbId);
-          setMoleculeData(data);
-          addLog('Load Molecule', data);
-          setToast({ message: 'Job restored successfully', type: 'success' });
-        } else {
-          setToast({ message: 'No molecules found in this job', type: 'error' });
-        }
-      } catch (error) {
-        console.error('Failed to restore job:', error);
-        setToast({ message: 'Failed to restore job session', type: 'error' });
-      } finally {
-        if (jobId && pdbId) {
-          handleLoadMolecule();
-        }
-        setLoading((prev) => ({ ...prev, molecule: false }));
       }
     };
-
     initJob();
   }, [jobId, pdbId]);
 
   if (!jobId) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-teal-50 to-slate-50">
-        <Header />
-        <div className="max-w-7xl mx-auto px-6 py-12 text-center">
-          <p className="text-slate-600">No job ID found. Please upload a PDB file first.</p>
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="text-center">
+          <h2 className="text-xl font-bold text-slate-900">No Job Selected</h2>
+          <Button onClick={() => window.location.href = '/'} className="mt-4">
+            Go Home
+          </Button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-teal-50 to-slate-50">
+    <div className="min-h-screen bg-slate-50">
       <Header />
 
-      <main className="max-w-7xl mx-auto px-6 py-8">
-        <div className="bio-card p-6 mb-6 border-teal-200">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-2xl font-bold bg-gradient-to-r from-teal-600 to-emerald-600 bg-clip-text text-transparent">
-                Molecular Analysis Dashboard
-              </h2>
-              <div className="flex gap-6 mt-3 text-sm text-slate-600">
-                <span>
-                  Job ID: <span className="font-mono font-semibold text-teal-700">{jobId}</span>
-                </span>
+      <main className="max-w-7xl mx-auto px-4 py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Left Column: Controls & Info */}
+          <div className="space-y-6">
+            {/* Job Info Card */}
+            <div className="bio-card p-6">
+              <h2 className="text-lg font-bold text-slate-800 mb-4">Job Details</h2>
+              <div className="space-y-3 text-sm">
+                <div>
+                  <span className="text-slate-500 block mb-1">Job ID</span>
+                  <div className="font-mono bg-slate-100 px-3 py-1.5 rounded text-slate-700 select-all">
+                    {jobId}
+                  </div>
+                </div>
                 {pdbId && (
-                  <span>
-                    PDB ID: <span className="font-mono font-semibold text-teal-700">{pdbId}</span>
-                  </span>
+                  <div>
+                    <span className="text-slate-500 block mb-1">PDB ID</span>
+                    <div className="font-mono bg-slate-100 px-3 py-1.5 rounded text-slate-700">
+                      {pdbId}
+                    </div>
+                  </div>
+                )}
+                {Object.keys(loading).some(k => loading[k]) && (
+                  <div className="flex items-center gap-2 text-teal-600 bg-teal-50 px-3 py-2 rounded-lg">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span className="font-medium">Processing...</span>
+                  </div>
                 )}
               </div>
             </div>
-            <a
-              href={`${API_BASE_URL}/docs`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-2 text-sm font-medium text-teal-700 hover:text-teal-900 transition-colors p-3 hover:bg-teal-50 rounded-lg"
-            >
-              Backend Docs
-              <ExternalLink className="w-4 h-4" />
-            </a>
-          </div>
-        </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="space-y-6">
-            <div className="bio-card p-6 border-teal-200">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                  <div className="p-2 rounded-lg bg-gradient-to-br from-teal-500 to-emerald-500">
-                    <Box className="w-5 h-5 text-white" />
-                  </div>
-                  Molecule Data
-                </h3>
+            {/* Actions Card */}
+            <div className="bio-card p-6">
+              <h2 className="text-lg font-bold text-slate-800 mb-4">Actions</h2>
+              <div className="space-y-3">
                 <Button
-                  onClick={handleLoadMolecule}
-                  loading={loading.molecule}
+                  onClick={handleDetectPockets}
+                  loading={loading.pockets}
+                  disabled={!pdbId}
                   variant="secondary"
-                  className="text-sm"
+                  className="w-full justify-between group"
                 >
-                  {moleculeData ? 'Reload' : 'Load Molecule'}
+                  <span>Detect Pockets</span>
+                  {pockets.length > 0 && (
+                    <span className="bg-teal-100 text-teal-700 px-2 py-0.5 rounded text-xs">
+                      {pockets.length}
+                    </span>
+                  )}
+                </Button>
+
+                <Button
+                  onClick={() => navigate(`/job/${jobId}/docking`)}
+                  disabled={!pdbId}
+                  className="w-full justify-between"
+                  style={{ background: 'linear-gradient(135deg, #0d9488 0%, #0f766e 100%)' }}
+                >
+                  <span className="flex items-center gap-2">
+                    <Box className="w-4 h-4" />
+                    Open Docking Studio
+                  </span>
+                  <ExternalLink className="w-4 h-4 opacity-50" />
                 </Button>
               </div>
+            </div>
 
-              {/* Visualization Controls */}
-              <div className="flex flex-wrap gap-4 mb-4 p-4 bg-slate-50 rounded-xl border border-slate-200">
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-slate-500 uppercase">Color Mode</label>
+            {/* Pockets List */}
+            {pockets.length > 0 && (
+              <div className="bio-card p-6">
+                <h2 className="text-lg font-bold text-slate-800 mb-4">Detected Pockets</h2>
+                <div className="max-h-64 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
+                  {pockets.map((pocket) => (
+                    <div
+                      key={pocket.pocket_id}
+                      className="p-3 rounded-lg border border-slate-200 hover:border-teal-300 transition-colors bg-white group cursor-pointer"
+                      onClick={() => {
+                        // Optional: Focus pocket in viewer
+                        setToast({ message: `Selected Pocket ${pocket.pocket_id}`, type: 'info' });
+                      }}
+                    >
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="font-bold text-slate-700">Pocket {pocket.pocket_id}</span>
+                        <span className="text-xs font-mono text-teal-600 bg-teal-50 px-2 py-1 rounded">
+                          Score: {pocket.score}
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-500 grid grid-cols-3 gap-2 mt-2">
+                        <div>
+                          <span className="block opacity-50">Residues</span>
+                          {(pocket.residues as any[])?.length || 0}
+                        </div>
+                        <div className="col-span-2">
+                          <span className="block opacity-50">Center (x,y,z)</span>
+                          {pocket.center && typeof pocket.center.x === 'number' ?
+                            `${pocket.center.x.toFixed(1)}, ${pocket.center.y.toFixed(1)}, ${pocket.center.z.toFixed(1)}`
+                            : 'N/A'}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Center/Right: Visualization */}
+          <div className="lg:col-span-2 space-y-6">
+            <div className="bio-card p-1 min-h-[600px] flex flex-col">
+              <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-white rounded-t-xl">
+                <div className="flex items-center gap-4">
+                  <h2 className="font-bold text-slate-800">Molecular Viewer</h2>
+                  <div className="h-4 w-px bg-slate-200"></div>
                   <div className="flex gap-2">
                     {(['element', 'residue', 'hydrophobicity', 'bfactor'] as ColorMode[]).map(mode => (
                       <button
                         key={mode}
                         onClick={() => setColorMode(mode)}
                         className={`px-3 py-1 text-xs rounded-full border transition-colors ${colorMode === mode
-                          ? 'bg-teal-600 text-white border-teal-600'
-                          : 'bg-white text-slate-600 border-slate-300 hover:border-teal-400'
+                          ? 'bg-teal-50 text-teal-700 border-teal-200 font-medium'
+                          : 'bg-white text-slate-500 border-slate-200 hover:border-teal-200'
                           }`}
                       >
                         {mode.charAt(0).toUpperCase() + mode.slice(1)}
@@ -232,7 +225,6 @@ export function JobDashboard() {
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-xs font-semibold text-slate-500 uppercase">Render Mode</label>
                   <div className="flex gap-2">
                     {(['ball-and-stick', 'space-filling'] as RenderMode[]).map(mode => (
                       <button
@@ -243,174 +235,50 @@ export function JobDashboard() {
                           : 'bg-white text-slate-600 border-slate-300 hover:border-teal-400'
                           }`}
                       >
-                        {mode.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}
+                        {mode.split('-').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}
                       </button>
                     ))}
                   </div>
                 </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-slate-500 uppercase">Options</label>
-                  <div>
-                    <button
-                      onClick={() => setShowLabels(!showLabels)}
-                      className={`px-3 py-1 text-xs rounded-full border transition-colors ${showLabels
-                        ? 'bg-teal-600 text-white border-teal-600'
-                        : 'bg-white text-slate-600 border-slate-300 hover:border-teal-400'
-                        }`}
-                    >
-                      Show Labels
-                    </button>
-                  </div>
-                </div>
               </div>
 
-              {moleculeData ? (
-                <MoleculeViewer
-                  moleculeData={moleculeData}
-                  selectedAtomIndex={selectedAtomIndex}
-                  onAtomSelect={setSelectedAtomIndex}
-                  colorMode={colorMode}
-                  renderMode={renderMode}
-                  showLabels={showLabels}
-                />
-              ) : (
-                <div className="text-center py-12 text-slate-500">
-                  {loading.molecule ? (
-                    <div className="flex items-center justify-center gap-2">
-                      <Loader2 className="w-5 h-5 animate-spin text-teal-600" />
-                      Loading molecule...
+              <div className="flex-1 bg-slate-100 relative rounded-b-xl overflow-hidden">
+                {moleculeData ? (
+                  <MoleculeViewer
+                    moleculeData={moleculeData}
+                    selectedAtomIndex={selectedAtomIndex}
+                    onAtomSelect={setSelectedAtomIndex}
+                    colorMode={colorMode}
+                    renderMode={renderMode}
+                  />
+                ) : (
+                  <div className="absolute inset-0 flex items-center justify-center text-slate-400">
+                    <div className="text-center">
+                      <Box className="w-16 h-16 mx-auto mb-4 opacity-50" />
+                      <p>Load a structure to visualize</p>
                     </div>
-                  ) : (
-                    <p className="font-medium">Click "Load Molecule" to view structure</p>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="space-y-6">
-            <div className="bio-card p-6 border-teal-200">
-              <h3 className="text-lg font-bold text-slate-900 mb-4">Analysis Actions</h3>
-
-              <div className="space-y-3">
-                <Button
-                  onClick={handlePreprocess}
-                  loading={loading.preprocess}
-                  disabled={!pdbId}
-                  className="w-full"
-                >
-                  Preprocess
-                </Button>
-
-                <Button
-                  onClick={handleDetectPockets}
-                  loading={loading.pockets}
-                  disabled={!pdbId}
-                  className="w-full"
-                >
-                  Detect Pockets
-                </Button>
-
-                {pockets.length > 0 && (
-                  <div className="text-sm font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg p-3">
-                    {pockets.length} pocket{pockets.length !== 1 ? 's' : ''} detected
                   </div>
                 )}
-
-                <div className="section-divider" />
-
-                <div className="space-y-3">
-                  <Button
-                    onClick={() => setIsDockingModalOpen(true)}
-                    disabled={!pdbId}
-                    className="w-full"
-                  >
-                    Start Docking
-                  </Button>
-
-                  <Button
-                    onClick={() => setIsRefinementModalOpen(true)}
-                    disabled={!pdbId}
-                    className="w-full"
-                    variant="secondary"
-                  >
-                    Start Refinement
-                  </Button>
-
-                  <Button
-                    onClick={() => setIsFoldingModalOpen(true)}
-                    className="w-full"
-                    variant="secondary"
-                  >
-                    Start Folding
-                  </Button>
-
-                  <Button
-                    onClick={() => setIsAttackModalOpen(true)}
-                    disabled={!pdbId || selectedAtomIndex === null}
-                    className="w-full"
-                    variant="secondary"
-                  >
-                    Attack {selectedAtomIndex !== null && `(Atom ${selectedAtomIndex})`}
-                  </Button>
-                </div>
               </div>
             </div>
-
-            <ActivityLog logs={logs} />
           </div>
         </div>
+      </main>
 
+      {/* Activity Log Overlay (Optional) */}
+      {logs.length > 0 && (
+        <div className="fixed bottom-4 right-4 z-50">
+          <ActivityLog logs={logs} />
+        </div>
+      )}
 
-      </main >
-
-      <DockingModal
-        isOpen={isDockingModalOpen}
-        onClose={() => setIsDockingModalOpen(false)}
-        jobId={jobId}
-        pdbId={pdbId || ''}
-        pockets={pockets}
-        onLog={addLog}
-        onToast={(message, type) => setToast({ message, type })}
-      />
-
-      <RefinementModal
-        isOpen={isRefinementModalOpen}
-        onClose={() => setIsRefinementModalOpen(false)}
-        jobId={jobId}
-        pdbId={pdbId || ''}
-        onLog={addLog}
-        onToast={(message, type) => setToast({ message, type })}
-      />
-
-      <FoldingModal
-        isOpen={isFoldingModalOpen}
-        onClose={() => setIsFoldingModalOpen(false)}
-        jobId={jobId}
-        onLog={addLog}
-        onToast={(message, type) => setToast({ message, type })}
-      />
-
-      <AttackModal
-        isOpen={isAttackModalOpen}
-        onClose={() => setIsAttackModalOpen(false)}
-        jobId={jobId}
-        pdbId={pdbId || ''}
-        atomIndex={selectedAtomIndex}
-        onLog={addLog}
-        onToast={(message, type) => setToast({ message, type })}
-      />
-
-      {
-        toast && (
-          <Toast
-            message={toast.message}
-            type={toast.type}
-            onClose={() => setToast(null)}
-          />
-        )
-      }
-    </div >
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast(null)}
+        />
+      )}
+    </div>
   );
 }

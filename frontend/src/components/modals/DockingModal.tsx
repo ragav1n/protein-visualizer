@@ -12,6 +12,7 @@ interface DockingModalProps {
   pockets: Pocket[];
   onLog: (action: string, data: unknown) => void;
   onToast: (message: string, type: 'error' | 'success' | 'info') => void;
+  onRender: (outputPdb: string) => void;
 }
 
 export function DockingModal({
@@ -58,7 +59,7 @@ export function DockingModal({
         const dockingResult = await apiClient.getDockingResult(jobId, dockId);
         onLog('Docking Result Poll', dockingResult);
 
-        if (dockingResult.status === 'completed' || dockingResult.status === 'failed') {
+        if (dockingResult.status === 'completed' || dockingResult.status === 'done' || dockingResult.status === 'failed') {
           if (pollingIntervalRef.current) {
             clearInterval(pollingIntervalRef.current);
           }
@@ -183,15 +184,41 @@ export function DockingModal({
                 <p className="text-slate-700">
                   Status:{' '}
                   <span
-                    className={`font-semibold ${result.status === 'completed' ? 'text-emerald-700' : 'text-red-700'
+                    className={`font-semibold ${result.status === 'done' || result.status === 'completed' ? 'text-emerald-700' : 'text-red-700'
                       }`}
                   >
                     {result.status}
                   </span>
                 </p>
 
+                {result.best_energy !== undefined && (
+                  <p className="text-slate-900 font-medium">
+                    Best Energy: <span className="text-emerald-700 text-lg font-bold">{result.best_energy.toFixed(2)} kcal/mol</span>
+                  </p>
+                )}
+
+                {result.output_pdb && (
+                  <div className="mt-4">
+                    <p className="text-slate-600 mb-2">Output Generated:</p>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="secondary"
+                        onClick={() => {
+                          onToast("Loaded out.pdb into viewer (Simulation)", "success");
+                          onClose();
+                          // In a real implementation, this would trigger a callback to load the file
+                          // onLog('Load PDB', result.output_pdb);
+                        }}
+                      >
+                        Render Docked Structure
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Legacy or Detailed Poses Fallback */}
                 {result.poses && result.poses.length > 0 && (
-                  <div>
+                  <div className="mt-4">
                     <p className="text-slate-700 font-semibold mb-2">
                       Poses ({result.poses.length}):
                     </p>
@@ -200,22 +227,16 @@ export function DockingModal({
                         <div
                           key={pose.pose_id}
                           className={`p-3 rounded-lg border cursor-pointer transition-colors ${selectedPose === pose.pose_id
-                              ? 'bg-emerald-50 border-emerald-300'
-                              : 'bg-white border-teal-200 hover:border-teal-300'
+                            ? 'bg-emerald-50 border-emerald-300'
+                            : 'bg-white border-teal-200 hover:border-teal-300'
                             }`}
                           onClick={() => setSelectedPose(pose.pose_id)}
                         >
                           <p className="font-semibold text-slate-900">{pose.pose_id}</p>
                           <p className="text-teal-700">Score: {pose.score}</p>
-                          {pose.path && <p className="text-xs text-slate-500">{pose.path}</p>}
                         </div>
                       ))}
                     </div>
-                    {selectedPose && (
-                      <p className="text-xs text-emerald-700 mt-2 font-medium">
-                        Selected pose for refinement: {selectedPose}
-                      </p>
-                    )}
                   </div>
                 )}
               </div>

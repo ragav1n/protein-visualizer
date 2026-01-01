@@ -7,10 +7,8 @@ from fastapi.responses import FileResponse
 from pdb_utils import parse_pdb, infer_bonds, atoms_to_json, load_atoms_from_json, calculate_phi_psi, calculate_contact_map, get_sequence
 from pocket import Scientific_Pockets
 from docking import run_docking_job
-from refinement import run_refinement_job
-from folding import submit_folding_job
-from attack import analyze_attack_site
-from sequence_validator import validate_protein_sequence
+from pocket import Scientific_Pockets
+from docking import run_docking_job
 
 BASE = "backend_jobs"
 JOBS_FILE = os.path.join(BASE, "jobs.json")
@@ -262,7 +260,8 @@ def bond_energy(job_id: str, pdb_id: str, a_idx: int, b_idx: int):
 async def start_docking(
     job_id: str,
     receptor_pdb_id: str = Form(...),
-    ligand_file: UploadFile = File(...)
+    ligand_file: UploadFile = File(...),
+    pocket_data: str = Form(None)
 ):
     job = JOBS.get(job_id)
     if not job:
@@ -284,13 +283,54 @@ async def start_docking(
 
     async def run():
         try:
-            result = run_docking_job(receptor_pdb, ligand_path, dock_dir)
+            # Parse pocket data if available
+            center = (10, 20, 15) # Default center
+            size = (20, 20, 20)   # Default size
+
+            if pocket_data:
+                try:
+                    p = json.loads(pocket_data)
+                    if "center" in p:
+                        c = p["center"]
+                        center = (c[0], c[1], c[2])
+                    
+                    # Heuristic for size based on volume or default to slightly larger for known pocket
+                    # If volume is available, approximate cube side
+                    if "volume" in p:
+                        vol = float(p["volume"])
+                        side = (vol ** (1.3)) + 12.0 # Buffer
+                        side = min(max(side, 18.0), 30.0) # Clamp between 18 and 30
+                        size = (side, side, side)
+                    else:
+                        size = (22, 22, 22)
+                except Exception as e:
+                    print(f"Error parsing pocket data: {e}")
+
+            result = run_docking_job(receptor_pdb, ligand_path, dock_dir, center=center, size=size)
+            
+            # Save result to file for endpoint to pick up
+            result_data = {
+                "docking_id": dock_id,
+                "status": "done",
+                **result
+            }
+            with open(os.path.join(dock_dir, "result.json"), "w") as f:
+                json.dump(result_data, f, indent=2)
+
             job.setdefault("docking", {})[dock_id] = {
                 "status": "done",
                 "result": result
             }
             save_jobs()
         except Exception as e:
+            error_data = {
+                "docking_id": dock_id,
+                "status": "error",
+                "error": str(e)
+            }
+            with open(os.path.join(dock_dir, "result.json"), "w") as f:
+                json.dump(error_data, f, indent=2)
+
             job.setdefault("docking", {})[dock_id] = {
                 "status": "error",
                 "error": str(e)
@@ -313,168 +353,113 @@ def docking_result(job_id: str, dock_id: str):
     return FileResponse(path)
 
 
-# ---------------------------
-# Phase 6: Refinement
-# ---------------------------
-@app.post("/job/{job_id}/start_refinement")
-def start_refinement(
-    job_id: str,
-    pdb_id: str = Form(...),
-    pose_file: str = Form(...)
-):
-    job = JOBS.get(job_id)
-    job_dir = job["dir"]
-
-    ref_id = uuid.uuid4().hex[:8]
-    ref_dir = os.path.join(job_dir, "refinement", ref_id)
-    os.makedirs(ref_dir)
-
-    result = run_refinement_job(pdb_id, pose_file, ref_dir)
-
-    with open(os.path.join(ref_dir, "result.json"), "w") as f:
-        json.dump(result, f, indent=2)
-
-    save_jobs() # Assuming we might want to track this in JOBS later, but good practice
-
-    return {"refinement_id": ref_id, "status": "done"}
-
-
-@app.get("/job/{job_id}/refinement/{ref_id}/result")
-def refinement_result(job_id: str, ref_id: str):
-    job = JOBS.get(job_id)
-
-    path = os.path.join(job["dir"], "refinement", ref_id, "result.json")
-    if not os.path.exists(path):
-        raise HTTPException(404, "Result not ready")
-
-    return FileResponse(path)
-
-
-# ---------------------------
-# Phase 7: Folding (Mock)
-# ---------------------------
-
-@app.post("/job/{job_id}/start_folding")
-def folding(job_id: str, sequence: str = Form(...)):
+@app.get("/job/{job_id}/docking/{docking_id}/molecule")
+def docking_molecule(job_id: str, docking_id: str):
     job = JOBS.get(job_id)
     if not job:
-        raise HTTPException(404, "Job not found")
+         raise HTTPException(404, "Job not found")
 
-    job_dir = job["dir"]
+    dock_dir = os.path.join(job["dir"], "docking", docking_id)
+    out_pdb = os.path.join(dock_dir, "out.pdb")
 
-    # Validate sequence
-    try:
-        clean_seq = validate_protein_sequence(sequence)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    fold_id = uuid.uuid4().hex[:8]
-    fold_dir = os.path.join(job_dir, "folding", fold_id)
-    os.makedirs(fold_dir, exist_ok=True)
-
-    # Run mock folding job (can replace with real ESMFold later)
-    result = submit_folding_job(clean_seq, fold_dir)
-
-    with open(os.path.join(fold_dir, "result.json"), "w") as f:
-        json.dump(result, f, indent=2)
+    # Try to find the specific PDB file for this job
+    # We uploaded it as {pdb_id}.pdb
+    files = [f for f in os.listdir(job["dir"]) if f.endswith(".pdb") and "out.pdb" not in f and "receptor" not in f]
+    receptor_path = None
     
-    save_jobs()
-
-    return {
-        "fold_id": fold_id,
-        "sequence_length": len(clean_seq),
-        "status": "validated and folded (mock)",
-        "result": result
-    }
-
-
-# ---------------------------
-# Phase 8: Covalent Attack Analysis
-# ---------------------------
-
-@app.post("/job/{job_id}/attack")
-def attack(
-    job_id: str,
-    pdb_id: str = Form(...),
-    atom_index: int = Form(...),
-    partner_job_id: str = Form(None),
-    partner_pdb_id: str = Form(None)
-):
-    # ----------------------
-    # Validate primary job
-    # ----------------------
-    job = JOBS.get(job_id)
-    if not job:
-        raise HTTPException(404, "Primary job not found.")
-
-    # Primary molecule path
-    mol_json = os.path.join(job["dir"], f"{pdb_id}.json")
-    if not os.path.exists(mol_json):
-        raise HTTPException(404, f"Molecule '{pdb_id}' not found in job {job_id}.")
-
-    # ----------------------
-    # Check partner molecule if provided
-    # ----------------------
-    partner_json = None
-    if partner_job_id and partner_pdb_id:
-        if partner_job_id not in JOBS:
-            raise HTTPException(404, "Partner job does not exist.")
-
-        pjob = JOBS[partner_job_id]
-        partner_json = os.path.join(pjob["dir"], f"{partner_pdb_id}.json")
-
-        if not os.path.exists(partner_json):
-            raise HTTPException(404, f"Partner molecule '{partner_pdb_id}' not found.")
-
-    # ----------------------
-    # Prepare output dir
-    # ----------------------
-    attack_id = uuid.uuid4().hex[:8]
-    attack_dir = os.path.join(job["dir"], "attack", attack_id)
-    os.makedirs(attack_dir, exist_ok=True)
-
-    # ----------------------
-    # Run reactivity analysis
-    # ----------------------
+    # Heuristic: try finding the exact pdb_id file first
+    expected_pdb = os.path.join(job["dir"], f"{job.get('pdb_id', '')}.pdb")
+    if os.path.exists(expected_pdb):
+        receptor_path = expected_pdb
+    elif files:
+        receptor_path = os.path.join(job["dir"], files[0])
+    
+    if not os.path.exists(out_pdb):
+        raise HTTPException(404, "Docking output not found")
+        
     try:
-        result = analyze_attack_site(
-            mol_json,
-            atom_index,
-            partner_json,
-            attack_dir
-        )
-    except ValueError as e:
-        raise HTTPException(400, str(e))  # Clean user error
+        # Parse ligand (docking output)
+        ligand_atoms_all = parse_pdb(out_pdb)
+        
+        # Filter for just the first model (assuming parse_pdb returns all models sequentially)
+        # We can detect model breaks if residue numbers reset or similar, but for now, 
+        # let's just take the first N atoms where N is atoms per model?
+        # A safer way with the current parse_pdb (which flattens everything) is tricky.
+        # But actually, showing *all* poses is kind of cool? Let's keep all poses for now.
+        # Or, just show the best pose (first one).
+        # Typically the first X atoms correspond to the first model.
+        # Let's count atoms in first model from the file content to be safe?
+        # For simplicity, let's just use all of them, but separate them visually?
+        # No, that will look messy.
+        # Let's try to infer if there are duplicates.
+        
+        ligand_atoms = ligand_atoms_all
+        # If we have receptor, merge
+        combined_atoms = []
+        combined_bonds = []
+        
+        if receptor_path:
+            try:
+                print(f"[DockingMolecule] Loading receptor from {receptor_path}")
+                receptor_atoms = parse_pdb(receptor_path)
+                combined_atoms.extend(receptor_atoms)
+                
+                # Infer bonds for receptor
+                receptor_bonds = infer_bonds(receptor_atoms)
+                combined_bonds.extend(receptor_bonds)
+
+                offset = len(combined_atoms) # Offset is current length (receptor count)
+                
+                # Taking ONLY the first model of ligand if possible. 
+                # If ligand_atoms_all has multiple models, they satisfy: same atom names repeated.
+                # Let's just take the first occurrence of atoms?
+                # Simple heuristic: Identify by atom index. in PDBQT, indices reset or continue?
+                # In the out.pdb, atoms are numbered 1..N for each MODEL.
+                # parse_pdb re-indexes them 1..Total?
+                # Let's check parse_pdb implementation in mind... it increments i=1.
+                # So we just get a long list. 
+                # Let's just slice the first model?
+                # How many atoms in one model?
+                # Logic: The ligand usually doesn't change atom count.
+                # We can check if atom index 1 appears multiple times?
+                # parse_pdb assigns its own index.
+                # Let's check if 'resseq' resets? no.
+                # Let's just SHOW ALL poses for now, as the user might want to see the cluster.
+                
+                for atom in ligand_atoms:
+                    new_atom = atom.copy()
+                    new_atom["index"] = offset + atom["index"] # Shift index to be unique
+                    new_atom["chain"] = "L" # Force ligand chain
+                    combined_atoms.append(new_atom)
+                
+                # Bonds for ligand
+                ligand_bonds = infer_bonds(ligand_atoms)
+                for b in ligand_bonds:
+                    combined_bonds.append({
+                        "a": b["a"] + offset,
+                        "b": b["b"] + offset,
+                        "dist": b["dist"]
+                    })
+            except Exception as e:
+                print(f"Error merging receptor: {e}")
+                # Fallback to just ligand
+                combined_atoms = ligand_atoms
+                combined_bonds = infer_bonds(ligand_atoms)
+        else:
+             combined_atoms = ligand_atoms
+             combined_bonds = infer_bonds(ligand_atoms)
+
+        return {
+            "atoms": combined_atoms,
+            "bonds": combined_bonds
+        }
     except Exception as e:
-        raise HTTPException(500, "Internal error: " + str(e))  # Unexpected
-
-    # Save to job memory
-    JOBS[job_id].setdefault("attacks", {})[attack_id] = {
-        "status": "done",
-        "result": result
-    }
-    save_jobs()
-
-    return {
-        "attack_id": attack_id,
-        "status": "done",
-        "result": result
-    }
-
-
-@app.get("/job/{job_id}/attack/{attack_id}/result")
-def attack_result(job_id: str, attack_id: str):
-    job = JOBS.get(job_id)
-
-    path = os.path.join(job["dir"], "attack", attack_id, "report.json")
-    if not os.path.exists(path):
-        raise HTTPException(404, "Result not ready")
-
-    return FileResponse(path)
+        print(f"Error parsing docked structure: {e}")
+        raise HTTPException(500, f"Failed to parse docked structure: {e}")
 
 
 # ---------------------------
-# Phase 9: Analysis
+# Phase 6: Analysis
 # ---------------------------
 
 @app.get("/job/{job_id}/analysis/ramachandran")
